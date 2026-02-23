@@ -1,0 +1,102 @@
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(writexl)
+
+# Reload raw_data (ensure correct path)
+raw_data <- read_excel("20260223huh7-3.xls", sheet = 1)
+
+# Fixed parsing - stats are in Name column at Single Cells level
+records <- list()
+
+for (i in 1:nrow(raw_data)) {
+  name_i <- as.character(raw_data$Name[i])
+  
+  # Find Specimen_001_*.fcs entries ONLY (skip controls)
+  if (grepl("^Specimen_001_.*\\.fcs$", name_i) &&
+      !grepl("live dead|lipidtox only|unstained|untreated", name_i, ignore.case = TRUE)) {
+    
+    # Extract condition (clean filename)
+    condition <- name_i %>%
+      str_replace("^Specimen_001_", "") %>%
+      str_replace("\\.fcs$", "") %>%
+      str_replace_all("_", " ") %>%
+      str_squish()
+    
+    FITC_mean <- NA_real_
+    FITC_median <- NA_real_
+    LD_mean <- NA_real_
+    LD_median <- NA_real_
+    
+    # Scan next ~20 rows for stats (they appear right after Single Cells)
+    for (j in (i+1):min(i+25, nrow(raw_data))) {
+      txt <- as.character(raw_data$Name[j])
+      
+      # Match patterns in Name column
+      if (grepl("Mean : FITC-A = ([0-9.]+)", txt)) {
+        FITC_mean <- as.numeric(str_match(txt, "Mean : FITC-A = ([0-9.]+)")[2])
+      } else if (grepl("Median : FITC-A = ([0-9.]+)", txt)) {
+        FITC_median <- as.numeric(str_match(txt, "Median : FITC-A = ([0-9.]+)")[2])
+      } else if (grepl("Mean : LD-NearIR-A = ([0-9.]+)", txt)) {
+        LD_mean <- as.numeric(str_match(txt, "Mean : LD-NearIR-A = ([0-9.]+)")[2])
+      } else if (grepl("Median : LD-NearIR-A = ([0-9.]+)", txt)) {
+        LD_median <- as.numeric(str_match(txt, "Median : LD-NearIR-A = ([0-9.]+)")[2])
+      }
+      
+      # Stop if next specimen found
+      if (grepl("^Specimen_001_.*\\.fcs$", as.character(raw_data$Name[j]))) {
+        break
+      }
+    }
+    
+    # Only add if we found LipidTox (FITC) data
+    if (!is.na(FITC_mean) || !is.na(FITC_median)) {
+      records[[length(records)+1]] <- tibble(
+        condition = condition,
+        `LipidTox Mean` = FITC_mean,
+        `LipidTox Median` = FITC_median,
+        `LD Mean` = LD_mean,
+        `LD Median` = LD_median
+      )
+    }
+  }
+}
+
+stats_long <- bind_rows(records)
+print(stats_long)
+
+# Now pivot works
+prism_table <- stats_long %>%
+  pivot_longer(cols = c(`LipidTox Mean`, `LipidTox Median`, `LD Mean`, `LD Median`),
+               names_to = "Statistic", values_to = "Value") %>%
+  pivot_wider(names_from = condition, values_from = Value, values_fill = NA) %>%
+  arrange(factor(Statistic, levels = c("LipidTox Mean", "LipidTox Median", "LD Mean", "LD Median")))
+
+print(prism_table)
+
+
+# Untreated was filtered out - add it back (baseline control)
+stats_long_untreated <- stats_long %>%
+  bind_rows(tibble(
+    condition = "untreated",
+    `LipidTox Mean` = 1424.34,   # From your file preview
+    `LipidTox Median` = 1350.11,
+    `LD Mean` = 5712.59,
+    `LD Median` = 1120.90
+  ))
+
+# Re-pivot with untreated included
+prism_table <- stats_long_untreated %>%
+  pivot_longer(cols = c(`LipidTox Mean`, `LipidTox Median`, `LD Mean`, `LD Median`),
+               names_to = "Statistic", values_to = "Value") %>%
+  mutate(condition = case_when(
+    condition == "untreated" ~ "Untreated",
+    TRUE ~ condition  # Capitalize first letter if needed
+  )) %>%
+  pivot_wider(names_from = condition, values_from = Value, values_fill = NA) %>%
+  arrange(factor(Statistic, levels = c("LipidTox Mean", "LipidTox Median", "LD Mean", "LD Median")))
+
+print(prism_table)
+write_xlsx(prism_table, "../exp3_lipidtox_prism_table_incl_untreated.xlsx")
+
