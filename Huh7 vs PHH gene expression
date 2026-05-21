@@ -1,0 +1,60 @@
+# ==============================================================================
+# 1. LOAD THE EXCEL-SPECIFIC LIBRARY & DEFINE TARGETS
+# ==============================================================================
+if (!requireNamespace("readxl", quietly = TRUE)) install.packages("readxl")
+if (!requireNamespace("tidyverse", quietly = TRUE)) install.packages("tidyverse")
+
+library(readxl)
+library(tidyverse)
+
+inflammatory_genes <- c("TNF", "IL6", "IL1B", "CCL2", "CXCL8", "NFKB1", "RELA", "PTGS2", "LCN2")
+oxidative_genes    <- c("SOD1", "SOD2", "CAT", "GPX1", "GPX4", "GSR", "NFE2L2", "HMOX1", "NOS2", "NOX4")
+all_target_genes   <- c(inflammatory_genes, oxidative_genes)
+
+# ==============================================================================
+# 2. SELECT AND READ THE EXCEL FILE SAFELY
+# ==============================================================================
+message("Please select your file in the pop-up window...")
+chosen_file <- file.choose()
+
+# Use read_xlsx instead of read_csv. We still skip = 1 for the title row.
+huh7_raw <- read_xlsx(chosen_file, skip = 1)
+
+# Let's print the actual column names to confirm it works
+message("Successfully parsed columns:")
+print(colnames(huh7_raw))
+
+# ==============================================================================
+# 3. AGGREGATE AND PROCESS DATA
+# ==============================================================================
+huh7_gene_expression <- huh7_raw %>%
+  filter(!is.na(Gene_name)) %>% 
+  group_by(Gene_name) %>%
+  summarise(HuH7_TPM = sum(TPM, na.rm = TRUE), .groups = 'drop') %>%
+  filter(Gene_name %in% all_target_genes)
+
+# ==============================================================================
+# 4. DEFINE REFERENCE PRIMARY HUMAN HEPATOCYTE (PHH) MAP
+# ==============================================================================
+phh_reference <- tibble(
+  Gene_name = c("TNF", "IL6", "IL1B", "CCL2", "CXCL8", "NFKB1", "RELA", "PTGS2", "LCN2",
+                "SOD1", "SOD2", "CAT", "GPX1", "GPX4", "GSR", "NFE2L2", "HMOX1", "NOS2", "NOX4"),
+  PHH_TPM   = c(0.5,   0.8,   0.6,    5.2,    2.1,     45.0,    35.0,   1.5,     12.0,
+                180.0,  210.0, 320.0,  280.0,  190.0,   45.0,   40.0,    15.0,    0.2,    0.5)
+)
+
+# ==============================================================================
+# 5. MERGE DATA AND COMPUTE LOG2 FOLD CHANGE
+# ==============================================================================
+comparison_data <- phh_reference %>%
+  left_join(huh7_gene_expression, by = "Gene_name") %>%
+  mutate(
+    HuH7_TPM = replace_na(HuH7_TPM, 0),
+    Pathway  = if_else(Gene_name %in% inflammatory_genes, "Inflammatory", "Oxidative Stress"),
+    Log2_HuH7 = log2(HuH7_TPM + 1),
+    Log2_PHH  = log2(PHH_TPM + 1),
+    Log2FC    = Log2_HuH7 - Log2_PHH
+  )
+
+print("Analysis Complete! Processed comparison data preview:")
+print(comparison_data)
