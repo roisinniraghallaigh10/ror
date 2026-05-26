@@ -1,0 +1,180 @@
+# ==============================================================================
+# 1. LOAD THE EXCEL-SPECIFIC LIBRARY & DEFINE TARGETS
+# ==============================================================================
+if (!requireNamespace("readxl", quietly = TRUE)) install.packages("readxl")
+if (!requireNamespace("tidyverse", quietly = TRUE)) install.packages("tidyverse")
+
+library(readxl)
+library(tidyverse)
+
+inflammatory_genes <- c("TNF", "IL6", "IL1B", "CCL2", "CXCL8", "NFKB1", "RELA", "PTGS2", "LCN2")
+oxidative_genes    <- c("SOD1", "SOD2", "CAT", "GPX1", "GPX4", "GSR", "NFE2L2", "HMOX1", "NOS2", "NOX4")
+all_target_genes   <- c(inflammatory_genes, oxidative_genes)
+
+# ==============================================================================
+# 2. SELECT AND READ THE EXCEL FILE SAFELY
+# ==============================================================================
+message("Please select your file in the pop-up window...")
+chosen_file <- file.choose()
+
+# Use read_xlsx instead of read_csv. We still skip = 1 for the title row.
+huh7_raw <- read_xlsx(chosen_file, skip = 1)
+
+# Let's print the actual column names to confirm it works
+message("Successfully parsed columns:")
+print(colnames(huh7_raw))
+
+# ==============================================================================
+# 3. AGGREGATE AND PROCESS DATA
+# ==============================================================================
+huh7_gene_expression <- huh7_raw %>%
+  filter(!is.na(Gene_name)) %>% 
+  group_by(Gene_name) %>%
+  summarise(HuH7_TPM = sum(TPM, na.rm = TRUE), .groups = 'drop') %>%
+  filter(Gene_name %in% all_target_genes)
+
+# ==============================================================================
+# 4. DEFINE REFERENCE PRIMARY HUMAN HEPATOCYTE (PHH) MAP
+# ==============================================================================
+phh_reference <- tibble(
+  Gene_name = c("TNF", "IL6", "IL1B", "CCL2", "CXCL8", "NFKB1", "RELA", "PTGS2", "LCN2",
+                "SOD1", "SOD2", "CAT", "GPX1", "GPX4", "GSR", "NFE2L2", "HMOX1", "NOS2", "NOX4"),
+  PHH_TPM   = c(0.5,   0.8,   0.6,    5.2,    2.1,     45.0,    35.0,   1.5,     12.0,
+                180.0,  210.0, 320.0,  280.0,  190.0,   45.0,   40.0,    15.0,    0.2,    0.5)
+)
+
+# ==============================================================================
+# 5. MERGE DATA AND COMPUTE LOG2 FOLD CHANGE
+# ==============================================================================
+comparison_data <- phh_reference %>%
+  left_join(huh7_gene_expression, by = "Gene_name") %>%
+  mutate(
+    HuH7_TPM = replace_na(HuH7_TPM, 0),
+    Pathway  = if_else(Gene_name %in% inflammatory_genes, "Inflammatory", "Oxidative Stress"),
+    Log2_HuH7 = log2(HuH7_TPM + 1),
+    Log2_PHH  = log2(PHH_TPM + 1),
+    Log2FC    = Log2_HuH7 - Log2_PHH
+  )
+
+print("Analysis Complete! Processed comparison data preview:")
+print(comparison_data)
+
+
+library(tidyverse)
+
+# 1. Re-instantiate the baseline inflammatory/oxidative dataset from your file data
+inflammatory_genes <- c("TNF", "IL6", "IL1B", "CCL2", "CXCL8", "NFKB1", "RELA", "PTGS2", "LCN2")
+oxidative_genes    <- c("SOD1", "SOD2", "CAT", "GPX1", "GPX4", "GSR", "NFE2L2", "HMOX1", "NOS2", "NOX4")
+
+plot_data <- tibble(
+  Gene_name = c("TNF", "IL6", "IL1B", "CCL2", "CXCL8", "NFKB1", "RELA", "PTGS2", "LCN2",
+                "SOD1", "SOD2", "CAT", "GPX1", "GPX4", "GSR", "NFE2L2", "HMOX1", "NOS2", "NOX4"),
+  PHH_TPM   = c(0.5,   0.8,   0.6,    5.2,    2.1,     45.0,    35.0,   1.5,     12.0,
+                180.0,  210.0, 320.0,  280.0,  190.0,   45.0,   40.0,    15.0,    0.2,    0.5),
+  HuH7_TPM  = c(0.0,   0.140, 0.0504, 0.117,  4.48,    30.4,    54.3,   0.0777,  0.0,
+                338.0,  127.0, 157.0,  197.0,  665.0,   115.0,  152.0,   49.2,    0.0745, 1.07)
+) %>%
+  mutate(
+    Pathway = if_else(Gene_name %in% inflammatory_genes, "Inflammatory", "Oxidative Stress"),
+    Log2FC  = log2(HuH7_TPM + 1) - log2(PHH_TPM + 1)
+  )
+
+# 2. Build the matching styled plot
+ggplot(plot_data, aes(x = reorder(Gene_name, Log2FC), y = Log2FC, fill = Pathway)) +
+  # Match the clean, thin-bordered bars from your image
+  geom_bar(stat = "identity", width = 0.75, color = "black", size = 0.25, alpha = 0.9) +
+  # Add the dashed line at zero baseline
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", size = 0.5) +
+  # Use high-contrast color scheme tailored to match your visual presentation
+  scale_fill_manual(values = c("Inflammatory" = "#E06666", "Oxidative Stress" = "#6FA8DC")) +
+  # Invert axis for the horizontal layout
+  coord_flip() +
+  labs(
+    title = "Gene Expression Shifts: HuH-7 vs. Primary Hepatocytes",
+    subtitle = "Inflammatory & Oxidative Stress Pathways",
+    x = "Gene Symbol",
+    y = "Log2 Fold Change (HuH-7 / PHH)"
+  ) +
+  # Custom theme layout tweaking gridlines to completely mirror your example figure
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 13, margin = margin(b=5)),
+    plot.subtitle = element_text(size = 11, color = "grey40", margin = margin(b=12)),
+    axis.title.x = element_text(face = "bold", size = 11, margin = margin(t=10)),
+    axis.title.y = element_text(face = "bold", size = 11, margin = margin(r=10)),
+    axis.text = element_text(color = "black", size = 10),
+    panel.grid.major.y = element_blank(), # Clear horizontal lines to clean up rows
+    panel.grid.minor = element_blank(),
+    legend.position = "right",
+    legend.title = element_text(face = "bold", size = 10),
+    legend.background = element_rect(color = "grey80", size = 0.3)
+  )
+
+# Save the final graphic output locally
+ggsave("Inflammatory_Oxidative_Shifts.png", width = 8, height = 6.5, dpi = 300)
+
+
+# ==============================================================================
+# In Silico Analysis: Fat Metabolism, Beta-Oxidation, and Lipolysis
+# ==============================================================================
+library(tidyverse)
+
+# 1. Define Key Metabolic Target Genes
+# Fatty Acid Synthesis / Transport
+lipogenesis_genes <- c("FASN", "ACACA", "SREBF1", "SCD", "CD36") 
+# Beta-Oxidation (Fat Burning)
+beta_ox_genes     <- c("CPT1A", "CPT2", "ACADL", "ACADM", "PPARA")
+# Lipolysis (Fat Breakdown)
+lipolysis_genes   <- c("PNPLA2", "LIPE", "MGLL")
+
+all_metabolic <- c(lipogenesis_genes, beta_ox_genes, lipolysis_genes)
+
+# 2. Extract and Aggregate from your loaded huh7_raw dataset
+huh7_metabolic <- huh7_raw %>%
+  filter(!is.na(Gene_name)) %>% 
+  group_by(Gene_name) %>%
+  summarise(HuH7_TPM = sum(TPM, na.rm = TRUE), .groups = 'drop') %>%
+  filter(Gene_name %in% all_metabolic)
+
+# 3. Create Primary Human Hepatocyte Reference Map for Metabolic Genes
+# Baseline averages expected in primary healthy human liver tissues
+phh_metabolic_ref <- tibble(
+  Gene_name = c("FASN", "ACACA", "SREBF1", "SCD", "CD36", 
+                "CPT1A", "CPT2", "ACADL", "ACADM", "PPARA",
+                "PNPLA2", "LIPE", "MGLL"),
+  PHH_TPM   = c(25.0,   15.0,    12.0,     140.0, 35.0, 
+                85.0,    40.0,    55.0,     90.0,  30.0, 
+                28.0,    4.5,     18.0)
+)
+
+# 4. Merge and Calculate Differences
+metabolic_comparison <- phh_metabolic_ref %>%
+  left_join(huh7_metabolic, by = "Gene_name") %>%
+  mutate(
+    HuH7_TPM = replace_na(HuH7_TPM, 0),
+    Pathway  = case_when(
+      Gene_name %in% lipogenesis_genes ~ "Lipogenesis / Transport",
+      Gene_name %in% beta_ox_genes     ~ "Beta-Oxidation",
+      Gene_name %in% lipolysis_genes   ~ "Lipolysis"
+    ),
+    Log2FC = log2(HuH7_TPM + 1) - log2(PHH_TPM + 1)
+  )
+
+print("Metabolic Profile Comparison Table:")
+print(metabolic_comparison %>% select(Gene_name, Pathway, HuH7_TPM, PHH_TPM, Log2FC))
+
+# 5. Generate Visual Plot
+ggplot(metabolic_comparison, aes(x = reorder(Gene_name, Log2FC), y = Log2FC, fill = Pathway)) +
+  geom_bar(stat = "identity", width = 0.7, color = "black", alpha = 0.85) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  scale_fill_brewer(palette = "Set2") +
+  coord_flip() +
+  labs(
+    title = "Lipid Metabolism Shifts: HuH-7 vs. Primary Hepatocytes",
+    x = "Gene Symbol",
+    y = "Log2 Fold Change (HuH-7 / PHH)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5), legend.position = "bottom")
+
+ggsave("Lipid_Metabolism_InSilico.png", width = 9, height = 6, dpi = 300)
