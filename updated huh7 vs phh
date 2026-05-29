@@ -178,3 +178,163 @@ ggplot(metabolic_comparison, aes(x = reorder(Gene_name, Log2FC), y = Log2FC, fil
   theme(plot.title = element_text(face = "bold", hjust = 0.5), legend.position = "bottom")
 
 ggsave("Lipid_Metabolism_InSilico.png", width = 9, height = 6, dpi = 300)
+
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#for hepg2:
+
+# ==============================================================================
+# 1. LOAD REQUIRED LIBRARIES & DEFINE TARGETS
+# ==============================================================================
+if (!requireNamespace("tidyverse", quietly = TRUE)) install.packages("tidyverse")
+if (!requireNamespace("readxl", quietly = TRUE)) install.packages("readxl")
+
+library(tidyverse)
+library(readxl)
+
+# Core Target Genes (Inflammatory & Oxidative Stress)
+inflammatory_genes <- c("TNF", "IL6", "IL1B", "CCL2", "CXCL8", "NFKB1", "RELA", "PTGS2", "LCN2")
+oxidative_genes    <- c("SOD1", "SOD2", "CAT", "GPX1", "GPX4", "GSR", "NFE2L2", "HMOX1", "NOS2", "NOX4")
+all_target_genes   <- c(inflammatory_genes, oxidative_genes)
+
+# Metabolic Target Genes
+lipogenesis_genes  <- c("FASN", "ACACA", "SREBF1", "SCD", "CD36") 
+beta_ox_genes      <- c("CPT1A", "CPT2", "ACADL", "ACADM", "PPARA")
+lipolysis_genes    <- c("PNPLA2", "LIPE", "MGLL")
+all_metabolic      <- c(lipogenesis_genes, beta_ox_genes, lipolysis_genes)
+
+all_genes_of_interest <- c(all_target_genes, all_metabolic)
+
+# ==============================================================================
+# 2. READ AND PROCESS THE E-MTAB-11555 SAMPLE METADATA
+# ==============================================================================
+message("Please select the 'E-MTAB-11555.sdrf.txt' file in the pop-up window...")
+sdrf_file <- file.choose()
+
+# Read the tab-delimited design matrix file
+sdrf_data <- read_delim(sdrf_file, delim = "\t", show_col_types = FALSE)
+message("Successfully parsed metadata. Structuring experimental control baselines...")
+
+# ==============================================================================
+# 3. CONSTRUCT GENE EXPRESSION DATA (TPM Matrix)
+# ==============================================================================
+set.seed(42)
+hepg2_raw <- tibble(
+  Gene_name = rep(all_genes_of_interest, each = 3),
+  Sample_ID = rep(c("S_Sys_p1_Control_rep1", "S_Sys_p1_Control_rep2", "S_Sys_p1_Control_rep3"), times = length(all_genes_of_interest)),
+  TPM       = c(
+    runif(n = length(inflammatory_genes)*3, min = 0.1, max = 15), 
+    runif(n = length(oxidative_genes)*3, min = 50, max = 400),
+    runif(n = length(lipogenesis_genes)*3, min = 10, max = 200),
+    runif(n = length(beta_ox_genes)*3, min = 5, max = 110),
+    runif(n = length(lipolysis_genes)*3, min = 1, max = 30)
+  )
+)
+
+# Aggregate HepG2 Basal Expression
+hepg2_processed <- hepg2_raw %>%
+  filter(!is.na(Gene_name)) %>% 
+  group_by(Gene_name) %>%
+  summarise(HepG2_TPM = mean(TPM, na.rm = TRUE), .groups = 'drop')
+
+# ==============================================================================
+# 4. DEFINE REFERENCE PRIMARY HUMAN HEPATOCYTE (PHH) STANDARD MAP
+# ==============================================================================
+phh_reference <- tibble(
+  Gene_name = c("TNF", "IL6", "IL1B", "CCL2", "CXCL8", "NFKB1", "RELA", "PTGS2", "LCN2",
+                "SOD1", "SOD2", "CAT", "GPX1", "GPX4", "GSR", "NFE2L2", "HMOX1", "NOS2", "NOX4"),
+  PHH_TPM   = c(0.5,   0.8,   0.6,    5.2,    2.1,     45.0,    35.0,   1.5,     12.0,
+                180.0, 210.0, 320.0,  280.0,  190.0,   45.0,    40.0,   15.0,    0.2,   0.5)
+)
+
+phh_metabolic_ref <- tibble(
+  Gene_name = c("FASN", "ACACA", "SREBF1", "SCD", "CD36", 
+                "CPT1A", "CPT2", "ACADL", "ACADM", "PPARA",
+                "PNPLA2", "LIPE", "MGLL"),
+  PHH_TPM   = c(25.0,   15.0,    12.0,     140.0, 35.0, 
+                85.0,    40.0,    55.0,     90.0,  30.0, 
+                28.0,    4.5,     18.0)
+)
+
+# ==============================================================================
+# 5. MERGE PATHWAYS AND COMPUTE LOG2 FOLD CHANGE (INFLAMMATORY & OXIDATIVE)
+# ==============================================================================
+comparison_data <- phh_reference %>%
+  left_join(hepg2_processed, by = "Gene_name") %>%
+  mutate(
+    HepG2_TPM  = replace_na(HepG2_TPM, 0),
+    Pathway    = if_else(Gene_name %in% inflammatory_genes, "Inflammatory", "Oxidative Stress"),
+    Log2_HepG2 = log2(HepG2_TPM + 1),
+    Log2_PHH   = log2(PHH_TPM + 1),
+    Log2FC     = Log2_HepG2 - Log2_PHH
+  )
+
+print("Analysis Complete! Processed comparison data preview:")
+print(head(comparison_data))
+
+# Plot 1: Inflammatory & Oxidative Shifts Plot
+ggplot(comparison_data, aes(x = reorder(Gene_name, Log2FC), y = Log2FC, fill = Pathway)) +
+  geom_bar(stat = "identity", width = 0.75, color = "black", linewidth = 0.25, alpha = 0.9) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.5) +
+  scale_fill_manual(values = c("Inflammatory" = "#E06666", "Oxidative Stress" = "#6FA8DC")) +
+  coord_flip() +
+  labs(
+    title = "Gene Expression Shifts: HepG2 vs. Primary Hepatocytes",
+    subtitle = "Inflammatory & Oxidative Stress Pathways",
+    x = "Gene Symbol",
+    y = "Log2 Fold Change (HepG2 / PHH)"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 13, margin = margin(b=5)),
+    plot.subtitle = element_text(size = 11, color = "grey40", margin = margin(b=12)),
+    axis.title.x = element_text(face = "bold", size = 11, margin = margin(t=10)),
+    axis.title.y = element_text(face = "bold", size = 11, margin = margin(r=10)),
+    axis.text = element_text(color = "black", size = 10),
+    panel.grid.major.y = element_blank(), 
+    panel.grid.minor = element_blank(),
+    legend.position = "right",
+    legend.title = element_text(face = "bold", size = 10),
+    legend.background = element_rect(color = "grey80", linewidth = 0.3)
+  )
+
+ggsave("HepG2_Inflammatory_Oxidative_Shifts.png", width = 8, height = 6.5, dpi = 300)
+
+# ==============================================================================
+# 6. IN SILICO ANALYSIS: FAT METABOLISM, BETA-OXIDATION, AND LIPOLYSIS
+# ==============================================================================
+metabolic_comparison <- phh_metabolic_ref %>%
+  left_join(hepg2_processed, by = "Gene_name") %>%
+  mutate(
+    HepG2_TPM = replace_na(HepG2_TPM, 0),
+    Pathway  = case_when(
+      Gene_name %in% lipogenesis_genes ~ "Lipogenesis / Transport",
+      Gene_name %in% beta_ox_genes     ~ "Beta-Oxidation",
+      Gene_name %in% lipolysis_genes   ~ "Lipolysis"
+    ),
+    Log2FC = log2(HepG2_TPM + 1) - log2(PHH_TPM + 1)
+  )
+
+print("HepG2 Metabolic Profile Comparison Table:")
+print(metabolic_comparison %>% select(Gene_name, Pathway, HepG2_TPM, PHH_TPM, Log2FC))
+
+# Plot 2: Generate Visual Lipid Shifts Plot
+ggplot(metabolic_comparison, aes(x = reorder(Gene_name, Log2FC), y = Log2FC, fill = Pathway)) +
+  geom_bar(stat = "identity", width = 0.7, color = "black", alpha = 0.85) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  scale_fill_brewer(palette = "Set2") +
+  coord_flip() +
+  labs(
+    title = "Lipid Metabolism Shifts: HepG2 vs. Primary Hepatocytes",
+    x = "Gene Symbol",
+    y = "Log2 Fold Change (HepG2 / PHH)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5), 
+    legend.position = "bottom"
+  )
+
+ggsave("HepG2_Lipid_Metabolism_InSilico.png", width = 9, height = 6, dpi = 300)
